@@ -216,14 +216,27 @@ td{padding:16px;font-size:14px;vertical-align:middle;}
 @keyframes pulse-ring{0%{box-shadow:0 0 0 0 rgba(74,222,128,.45);}70%{box-shadow:0 0 0 10px rgba(74,222,128,0);}100%{box-shadow:0 0 0 0 rgba(74,222,128,0);}}
 
 /* Responsive */
+/* Responsive */
 @media(max-width:768px){
- .header{padding:20px 16px;} .header h1{font-size:22px;}
- .endpoint-box{padding:12px;margin:16px;flex-direction:column;}
- .endpoint-url{font-size:12px;min-width:auto;}
- .table-wrap{padding:0 8px 20px;}
- td,th{padding:10px 8px;font-size:12px;}
- .otp-val{font-size:18px;letter-spacing:4px;}
- .btn-copy, .btn-del{padding:4px 10px;font-size:11px;}
+  .header{padding:20px 16px;} 
+  .header h1{font-size:22px;}
+  .endpoint-box{padding:12px;margin:16px;flex-direction:column;align-items:stretch;}
+  .endpoint-url{font-size:11px;min-width:auto;margin-bottom:8px;}
+  .btn-copy-endpoint{width:100%;}
+  
+  .table-wrap{padding:0 12px 20px;}
+  
+  /* Convert table to cards */
+  table, thead, tbody, th, td, tr { display: block; }
+  thead tr { position: absolute; top: -9999px; left: -9999px; }
+  tr { background: rgba(30,41,59,.4); margin-bottom: 16px; border-radius: 12px; border: 1px solid rgba(148,163,184,.1); padding: 8px; }
+  td { border: none; position: relative; padding-left: 45% !important; text-align: left; min-height: 40px; display: flex; align-items: center; justify-content: flex-end; }
+  td:before { content: attr(data-label); position: absolute; left: 16px; width: 40%; font-weight: 600; font-size: 11px; text-transform: uppercase; color: #94a3b8; text-align: left; }
+  
+  .otp-val{font-size:20px;letter-spacing:2px;}
+  .btn-copy, .btn-del{padding:8px 14px; font-size:12px; flex:1; justify-content:center;}
+  td[style*="display:flex"]{ padding-left: 16px !important; justify-content: center; gap: 10px; margin-top: 8px; border-top: 1px solid rgba(148,163,184,.05); padding-top: 12px !important; }
+  td[style*="display:flex"]:before { display: none; }
 }
 </style>
 </head>
@@ -345,10 +358,10 @@ async function refreshOtps() {
             const lastSeenText = lastSeenSecs < 5 ? 'Just now' : lastSeenSecs + 's ago';
 
             return `<tr>
-                <td class="phone-col">${d.phone_number}</td>
-                <td>${otpHtml}</td>
-                <td style="color:#94a3b8;font-size:12px;">${lastSeenText}</td>
-                <td>${timerHtml}</td>
+                <td class="phone-col" data-label="Phone Number">${d.phone_number}</td>
+                <td data-label="Status / OTP">${otpHtml}</td>
+                <td style="color:#94a3b8;font-size:12px;" data-label="Last Seen">${lastSeenText}</td>
+                <td data-label="Timer">${timerHtml}</td>
                 <td style="display:flex;gap:6px;flex-wrap:wrap;">${copyBtn}<button class="btn-del" onclick="deleteOtp('${d.phone_number.replace(/'/g, "\\'")}')">🗑 Clear</button></td>
             </tr>`;
         }).join('');
