@@ -36,40 +36,54 @@ def receive_otp():
     if request.method == 'OPTIONS':
         return '', 204
 
-    data = request.get_json()
+    data = request.get_json() or {}
     message = data.get('message', '')
     phone_number = data.get('phone_number', 'Unknown')
+    direct_otp = data.get('otp') # Support direct OTP field if provided
 
     if phone_number == "Unknown" or not phone_number:
         return jsonify({'status': 'ignored', 'message': 'Unknown phone number.'}), 200
 
-    if "IVACBD" not in message:
-        return jsonify({'status': 'error', 'message': 'Invalid source.'}), 400
-
-    words = re.findall(r'\b(?:Zero|One|Two|Three|Four|Five|Six|Seven|Eight|Nine)\b', message)
-    if len(words) < 6:
-        return jsonify({'status': 'error', 'message': '6-digit OTP not found.'}), 400
-
-    otp_string = "".join(WORD_TO_DIGIT[w] for w in words[-6:])
+    otp_string = None
+    
+    # 1. Try direct OTP field
+    if direct_otp and direct_otp.lower() != "none":
+        otp_string = str(direct_otp)
+    
+    # 2. Try word-based OTP (IVAC format)
+    if not otp_string:
+        words = re.findall(r'\b(?:Zero|One|Two|Three|Four|Five|Six|Seven|Eight|Nine)\b', message)
+        if len(words) >= 6:
+            otp_string = "".join(WORD_TO_DIGIT[w] for w in words[-6:])
+    
+    # 3. Try numeric 6-digit OTP (Common bank format)
+    if not otp_string:
+        nums = re.findall(r'\d{6}', message)
+        if nums:
+            otp_string = nums[0]
 
     with lock:
         # Cancel existing timer if any
         if phone_number in otps and otps[phone_number].get('timer'):
             otps[phone_number]['timer'].cancel()
         
-        # Store OTP with phone number
+        # Store in registry (otp may be None)
         otps[phone_number] = {
             'otp': otp_string,
-            'timestamp': time.time(),
-            'timer': None
+            'timestamp': time.time() if otp_string else (otps.get(phone_number, {}).get('timestamp') or time.time()),
+            'timer': None,
+            'last_seen': time.time()
         }
         
-        # Start 3-minute timer
-        timer = threading.Timer(180, reset_otp, args=[phone_number])
-        timer.start()
-        otps[phone_number]['timer'] = timer
+        if otp_string:
+            # Start 3-minute timer for OTP expiry
+            timer = threading.Timer(180, reset_otp, args=[phone_number])
+            timer.start()
+            otps[phone_number]['timer'] = timer
+            print(f"[{phone_number}] OTP received: {otp_string}")
+        else:
+            print(f"[{phone_number}] Heartbeat/Connection check")
 
-    print(f"[{phone_number}] OTP received: {otp_string}")
     return jsonify({'status': 'success', 'otp': otp_string, 'phone': phone_number}), 200
 
 # ── API: Get all OTPs ────────────────────────────────────────────────
@@ -91,6 +105,7 @@ def get_all_otps():
                 'otp': otp,
                 'time_left': max(time_left, 0),
                 'timestamp': data['timestamp'],
+                'last_seen': data.get('last_seen', data['timestamp']),
             })
         
         # Sort by timestamp (newest first)
@@ -104,12 +119,10 @@ def get_otp_by_phone(phone):
         if phone in otps:
             data = otps[phone]
             otp = data['otp']
-            time_left = 0
-            if otp and data['timestamp']:
-                time_left = int(180 - (time.time() - data['timestamp']))
-                if time_left <= 0:
-                    otp = None
-                    time_left = 0
+            if not otp:
+                return jsonify({'error': 'No active OTP for this phone'}), 404
+            
+            time_left = int(180 - (time.time() - data['timestamp']))
             return jsonify({
                 'phone': phone,
                 'otp': otp,
@@ -256,13 +269,14 @@ td{padding:16px;font-size:14px;vertical-align:middle;}
         <thead>
             <tr>
                 <th>Phone Number</th>
-                <th>Live OTP</th>
+                <th>Status / Live OTP</th>
+                <th>Last Seen</th>
                 <th>Timer</th>
                 <th>Actions</th>
             </tr>
         </thead>
         <tbody id="otp-table">
-            <tr><td colspan="4"><div class="empty"><div class="icon">📱</div><p>Waiting for OTPs…<br>Send SMS to the endpoint above.</p></div></td></tr>
+            <tr><td colspan="5"><div class="empty"><div class="icon">📱</div><p>Waiting for OTPs…<br>Send SMS to the endpoint above.</p></div></td></tr>
         </tbody>
     </table>
 </div>
@@ -323,13 +337,17 @@ async function refreshOtps() {
         tbody.innerHTML = data.map(d => {
             const otpHtml = d.otp
                 ? `<div style="display:flex;align-items:center;gap:8px;"><span class="pulse live"></span><span class="otp-val">${d.otp}</span></div>`
-                : `<div style="display:flex;align-items:center;gap:8px;"><span class="pulse idle"></span><span class="otp-waiting">Expired</span></div>`;
+                : `<div style="display:flex;align-items:center;gap:8px;"><span class="pulse idle" style="background:#38bdf8;"></span><span class="otp-waiting" style="color:#38bdf8;">Connected (Waiting...)</span></div>`;
             const timerHtml = d.otp ? `<div class="timer">${fmtTimer(d.time_left)}</div>` : '—';
             const copyBtn = d.otp ? `<button class="btn-copy" onclick="copyText('${d.otp}')">📋 Copy OTP</button>` : '';
             
+            const lastSeenSecs = Math.floor(Date.now()/1000 - d.last_seen);
+            const lastSeenText = lastSeenSecs < 5 ? 'Just now' : lastSeenSecs + 's ago';
+
             return `<tr>
                 <td class="phone-col">${d.phone_number}</td>
                 <td>${otpHtml}</td>
+                <td style="color:#94a3b8;font-size:12px;">${lastSeenText}</td>
                 <td>${timerHtml}</td>
                 <td style="display:flex;gap:6px;flex-wrap:wrap;">${copyBtn}<button class="btn-del" onclick="deleteOtp('${d.phone_number.replace(/'/g, "\\'")}')">🗑 Clear</button></td>
             </tr>`;
