@@ -1,15 +1,10 @@
 javascript:(function(){
     const e=document.getElementById("visa-master-dash"); e&&e.remove();
     const BASE_URL = "https://untold-playable-fanatic.ngrok-free.dev";
-    
-    const phoneInput = document.querySelector('input[name="phone"]');
-    const autoPhone = phoneInput ? phoneInput.value : "";
-    
-    let phoneNumber = localStorage.getItem("ivac_phone") || autoPhone || "";
+    let phoneNumber = localStorage.getItem("ivac_phone") || "01889106084";
     phoneNumber = prompt("Enter Phone Number to track:", phoneNumber);
     if(!phoneNumber) return;
     localStorage.setItem("ivac_phone", phoneNumber);
-    
     const t=document.createElement("div");
     t.id="visa-master-dash";
     t.style="position:fixed;top:40px;right:20px;z-index:10000;background:#fff;border:3px solid #f58220;border-radius:16px;padding:20px;width:320px;box-shadow:0 10px 40px rgba(0,0,0,0.3);font-family:sans-serif;color:#000";
@@ -21,7 +16,6 @@ javascript:(function(){
     const statusEl=()=>document.getElementById("status-msg");
     let stopped=false, attempt=0, submitCount=0;
     document.getElementById("stop-btn").addEventListener("click",function(){ stopped=true; statusEl().innerText="⏹ Stopped."; });
-
     function fillOTP(otp){
         statusEl().style.color="#2e7d32";
         statusEl().innerText="✅ OTP Found: "+otp;
@@ -35,32 +29,18 @@ javascript:(function(){
                 s.dispatchEvent(new KeyboardEvent("keyup",{key:v,bubbles:true}));
             }
         });
-        
         const clickVerify = function(){
             if(stopped) return;
-            // More aggressive button finding
-            let b = document.querySelector('button[type="submit"]');
-            if(!b || !b.innerText.includes("Verify")){
-                b = Array.from(document.querySelectorAll("button")).find(function(btn){
-                    return btn.innerText.includes("Verify") || btn.textContent.includes("Verify");
-                });
-            }
-            
+            const b = document.querySelector('button[type="submit"]') || Array.from(document.querySelectorAll("button")).find(function(b){return b.textContent.includes("Verify")});
             if(b){
                 submitCount++;
-                b.disabled = false; // Force enable just in case
                 b.click();
                 statusEl().innerText = "🚀 Submitting... (Try #" + submitCount + ")";
-                // Retry every 1.5 seconds if page doesn't change
-                setTimeout(clickVerify, 1500);
-            } else {
-                statusEl().innerText = "⚠️ Button not found, retrying...";
-                setTimeout(clickVerify, 1000);
+                setTimeout(clickVerify, 2000);
             }
         };
-        setTimeout(clickVerify, 600);
+        setTimeout(clickVerify, 500);
     }
-
     function tryFetch(){
         if(stopped) return;
         attempt++;
