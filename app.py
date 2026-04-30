@@ -13,22 +13,33 @@ def add_cors(response):
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Accept, ngrok-skip-browser-warning'
     return response
 
-# ── Storage ──────────────────────────────────────────────────────────
-# otps = { phone_number: { otp, timestamp, timer } }
-otps = {}
-lock = threading.Lock()
+import sqlite3
+import os
+
+# Database Path (Ensure write permissions on PythonAnywhere)
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "otps.db")
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS otps (
+                phone_number TEXT PRIMARY KEY,
+                otp TEXT,
+                timestamp REAL,
+                last_seen REAL
+            )
+        """)
+init_db()
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 WORD_TO_DIGIT = {
     'Zero': '0', 'One': '1', 'Two': '2', 'Three': '3', 'Four': '4',
     'Five': '5', 'Six': '6', 'Seven': '7', 'Eight': '8', 'Nine': '9'
 }
-
-def reset_otp(phone_number):
-    with lock:
-        if phone_number in otps:
-            otps[phone_number]['otp'] = None
-            otps[phone_number]['timestamp'] = None
-            print(f"OTP expired for {phone_number}")
 
 # ── Universal OTP Receiver ───────────────────────────────────────────
 @app.route('/receive_otp', methods=['POST', 'OPTIONS'])
@@ -64,67 +75,68 @@ def receive_otp():
         if nums:
             otp_string = nums[0]
 
-    with lock:
-        # Cancel existing timer if any
-        if phone_number in otps and otps[phone_number].get('timer'):
-            otps[phone_number]['timer'].cancel()
-        
-        # Store in registry (otp may be None)
-        otps[phone_number] = {
-            'otp': otp_string,
-            'timestamp': time.time() if otp_string else (otps.get(phone_number, {}).get('timestamp') or time.time()),
-            'timer': None,
-            'last_seen': time.time()
-        }
+    with sqlite3.connect(DB_PATH) as conn:
+        # Check if exists
+        curr = conn.execute("SELECT * FROM otps WHERE phone_number = ?", (phone_number,)).fetchone()
+        now = time.time()
         
         if otp_string:
-            # Start 3-minute timer for OTP expiry
-            timer = threading.Timer(180, reset_otp, args=[phone_number])
-            timer.start()
-            otps[phone_number]['timer'] = timer
+            if curr:
+                conn.execute("UPDATE otps SET otp = ?, timestamp = ?, last_seen = ? WHERE phone_number = ?", 
+                             (otp_string, now, now, phone_number))
+            else:
+                conn.execute("INSERT INTO otps (phone_number, otp, timestamp, last_seen) VALUES (?, ?, ?, ?)",
+                             (phone_number, otp_string, now, now))
             print(f"[{phone_number}] OTP received: {otp_string}")
         else:
-            print(f"[{phone_number}] Heartbeat/Connection check")
+            if curr:
+                conn.execute("UPDATE otps SET last_seen = ? WHERE phone_number = ?", (now, phone_number))
+            else:
+                conn.execute("INSERT INTO otps (phone_number, otp, timestamp, last_seen) VALUES (?, NULL, NULL, ?)",
+                             (phone_number, now))
+            print(f"[{phone_number}] Heartbeat")
+        conn.commit()
 
     return jsonify({'status': 'success', 'otp': otp_string, 'phone': phone_number}), 200
 
 # ── API: Get all OTPs ────────────────────────────────────────────────
 @app.route('/api/otps', methods=['GET'])
 def get_all_otps():
-    with lock:
+    with get_db_connection() as conn:
+        rows = conn.execute("SELECT * FROM otps ORDER BY last_seen DESC").fetchall()
         result = []
-        for phone, data in otps.items():
-            otp = data['otp']
+        now = time.time()
+        for row in rows:
+            otp = row['otp']
             time_left = 0
-            if otp and data['timestamp']:
-                time_left = int(180 - (time.time() - data['timestamp']))
-                if time_left <= 0:
-                    otp = None
-                    time_left = 0
+            # Expire OTP after 3 mins
+            if otp and row['timestamp'] and (now - row['timestamp'] > 180):
+                otp = None
             
+            if otp:
+                time_left = int(180 - (now - row['timestamp']))
+
             result.append({
-                'phone_number': phone,
+                'phone_number': row['phone_number'],
                 'otp': otp,
                 'time_left': max(time_left, 0),
-                'timestamp': data['timestamp'],
-                'last_seen': data.get('last_seen', data['timestamp']),
+                'timestamp': row['timestamp'],
+                'last_seen': row['last_seen'],
             })
-        
-        # Sort by timestamp (newest first)
-        result.sort(key=lambda x: x['timestamp'] or 0, reverse=True)
         return jsonify(result)
 
 # ── API: Get OTP by Phone ───────────────────────────────────────────
 @app.route('/api/otp/<path:phone>', methods=['GET'])
 def get_otp_by_phone(phone):
-    with lock:
-        if phone in otps:
-            data = otps[phone]
-            otp = data['otp']
-            if not otp:
+    now = time.time()
+    with get_db_connection() as conn:
+        row = conn.execute("SELECT * FROM otps WHERE phone_number = ?", (phone,)).fetchone()
+        if row:
+            otp = row['otp']
+            if not otp or (row['timestamp'] and (now - row['timestamp'] > 180)):
                 return jsonify({'error': 'No active OTP for this phone'}), 404
             
-            time_left = int(180 - (time.time() - data['timestamp']))
+            time_left = int(180 - (now - row['timestamp']))
             return jsonify({
                 'phone': phone,
                 'otp': otp,
@@ -132,15 +144,13 @@ def get_otp_by_phone(phone):
             })
         return jsonify({'error': 'Phone not found'}), 404
 
-
 # ── Clear single OTP ─────────────────────────────────────────────────
-@app.route('/api/clear/<path:phone_number>', methods=['DELETE'])
-def clear_otp(phone_number):
-    with lock:
-        if phone_number in otps:
-            if otps[phone_number].get('timer'):
-                otps[phone_number]['timer'].cancel()
-            del otps[phone_number]
+@app.route('/api/clear/<path:phone>', methods=['DELETE'])
+def delete_otp(phone):
+    with sqlite3.connect(DB_PATH) as conn:
+        res = conn.execute("DELETE FROM otps WHERE phone_number = ?", (phone,))
+        if res.rowcount > 0:
+            conn.commit()
             return jsonify({'status': 'deleted'}), 200
         return jsonify({'error': 'Not found'}), 404
 
