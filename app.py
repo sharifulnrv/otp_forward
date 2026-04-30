@@ -52,9 +52,11 @@ def receive_otp():
     
     # 2. Try word-based OTP (IVAC format)
     if not otp_string:
-        words = re.findall(r'\b(?:Zero|One|Two|Three|Four|Five|Six|Seven|Eight|Nine)\b', message)
+        # Match words case-insensitively
+        words = re.findall(r'\b(?:Zero|One|Two|Three|Four|Five|Six|Seven|Eight|Nine)\b', message, re.IGNORECASE)
         if len(words) >= 6:
-            otp_string = "".join(WORD_TO_DIGIT[w] for w in words[-6:])
+            # Map words to digits regardless of case
+            otp_string = "".join(WORD_TO_DIGIT[w.capitalize()] for w in words[-6:])
     
     # 3. Try numeric 6-digit OTP (Common bank format)
     if not otp_string:
