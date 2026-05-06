@@ -26,9 +26,16 @@ def init_db():
                 phone_number TEXT PRIMARY KEY,
                 otp TEXT,
                 timestamp REAL,
-                last_seen REAL
+                last_seen REAL,
+                created_at REAL
             )
         """)
+        # Migration: Add created_at if it doesn't exist
+        try:
+            conn.execute("ALTER TABLE otps ADD COLUMN created_at REAL")
+            conn.execute("UPDATE otps SET created_at = last_seen WHERE created_at IS NULL")
+        except sqlite3.OperationalError:
+            pass 
 init_db()
 
 def get_db_connection():
@@ -85,15 +92,15 @@ def receive_otp():
                 conn.execute("UPDATE otps SET otp = ?, timestamp = ?, last_seen = ? WHERE phone_number = ?", 
                              (otp_string, now, now, phone_number))
             else:
-                conn.execute("INSERT INTO otps (phone_number, otp, timestamp, last_seen) VALUES (?, ?, ?, ?)",
-                             (phone_number, otp_string, now, now))
+                conn.execute("INSERT INTO otps (phone_number, otp, timestamp, last_seen, created_at) VALUES (?, ?, ?, ?, ?)",
+                             (phone_number, otp_string, now, now, now))
             print(f"[{phone_number}] OTP received: {otp_string}")
         else:
             if curr:
                 conn.execute("UPDATE otps SET last_seen = ? WHERE phone_number = ?", (now, phone_number))
             else:
-                conn.execute("INSERT INTO otps (phone_number, otp, timestamp, last_seen) VALUES (?, NULL, NULL, ?)",
-                             (phone_number, now))
+                conn.execute("INSERT INTO otps (phone_number, otp, timestamp, last_seen, created_at) VALUES (?, NULL, NULL, ?, ?)",
+                             (phone_number, now, now))
             print(f"[{phone_number}] Heartbeat")
         conn.commit()
 
@@ -103,7 +110,8 @@ def receive_otp():
 @app.route('/api/otps', methods=['GET'])
 def get_all_otps():
     with get_db_connection() as conn:
-        rows = conn.execute("SELECT * FROM otps ORDER BY last_seen DESC").fetchall()
+        # Sort by created_at DESC to keep positions static (newest at top)
+        rows = conn.execute("SELECT * FROM otps ORDER BY created_at DESC").fetchall()
         result = []
         now = time.time()
         for row in rows:
@@ -153,6 +161,17 @@ def delete_otp(phone):
             conn.commit()
             return jsonify({'status': 'deleted'}), 200
         return jsonify({'error': 'Not found'}), 404
+
+# ── Clear Inactive ──────────────────────────────────────────────────
+@app.route('/api/clear_inactive', methods=['DELETE'])
+def clear_inactive():
+    now = time.time()
+    threshold = 600 # 10 minutes
+    with sqlite3.connect(DB_PATH) as conn:
+        res = conn.execute("DELETE FROM otps WHERE last_seen < ?", (now - threshold,))
+        count = res.rowcount
+        conn.commit()
+    return jsonify({'status': 'success', 'cleared_count': count}), 200
 
 # ── Dashboard ────────────────────────────────────────────────────────
 
@@ -287,6 +306,9 @@ td{padding:16px;font-size:14px;vertical-align:middle;}
         <div class="stat-val" id="active-otps">0</div>
         <div class="stat-label">OTPs Ready</div>
     </div>
+    <div class="stat" style="display:flex;align-items:center;justify-content:center;padding:0 12px;background:none;border:none;">
+        <button class="btn-del" onclick="clearInactive()" style="padding:10px 16px;font-size:13px;border:1px solid rgba(248,113,113,.2);">🧹 Clear Inactive</button>
+    </div>
 </div>
 
 <div class="table-wrap">
@@ -342,6 +364,14 @@ async function deleteOtp(phone) {
     if (!confirm('Clear this OTP?')) return;
     await fetch('/api/clear/' + encodeURIComponent(phone), { method:'DELETE' });
     showToast('🗑️ Cleared');
+    refreshOtps();
+}
+
+async function clearInactive() {
+    if (!confirm('Clear all numbers inactive for > 10 mins?')) return;
+    const res = await fetch('/api/clear_inactive', { method:'DELETE' });
+    const data = await res.json();
+    showToast(`🧹 Cleared ${data.cleared_count} numbers`);
     refreshOtps();
 }
 
